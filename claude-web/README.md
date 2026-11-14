@@ -15,3 +15,14 @@ plugin can also apply edits requested by the owner and verify the resulting note
 
 For ChatGPT, add the server URL as a custom MCP server with OAuth authentication
 at https://chatgpt.com/plugins and complete the OAuth authorization flow.
+
+Build the Claude web archive from the repository root:
+
+```sh
+python3 claude-web/package.py
+```
+
+Upload `claude-web/dist/siyuan-notes-claude.zip`. Its root contains
+`.claude-plugin/plugin.json`, `.mcp.json`, and `skills/siyuan/SKILL.md`.
+Local Claude Code and Codex installation commands are in
+[../local/README.md](../local/README.md).
