@@ -1,6 +1,7 @@
 """HTTPS/OAuth endpoint for the Siyuan tools in this fork."""
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 import siyuan_mcp_server as upstream
@@ -10,9 +11,30 @@ from mcp.server.auth.routes import build_metadata, cors_middleware
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.applications import Starlette
+from starlette.routing import Mount, Route
 
 from oauth import PasswordOAuth
+from homepage import build_homepage_app
+from siyuan_mcp_server.access import web_client
+
+
+class ClientAccessMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, provider, cli_client_ids):
+        super().__init__(app)
+        self.provider, self.cli_client_ids = provider, cli_client_ids
+
+    async def dispatch(self, request, call_next):
+        authorization = request.headers.get("Authorization", "")
+        token = None
+        if authorization.startswith("Bearer "):
+            token = await self.provider.load_access_token(authorization[7:])
+        context = web_client.set(not (token and token.client_id in self.cli_client_ids))
+        try:
+            return await call_next(request)
+        finally:
+            web_client.reset(context)
 
 
 def build_server(provider):
@@ -70,4 +92,16 @@ if __name__ == "__main__":
 
     app.routes.insert(0, Route("/.well-known/oauth-authorization-server", metadata))
     app.routes.insert(0, Route("/revoke", cors_middleware(provider.revoke_request, ["POST", "OPTIONS"]), methods=["POST", "OPTIONS"]))
+    app.add_middleware(ClientAccessMiddleware, provider=provider,
+                       cli_client_ids=set(os.environ.get("SIYUAN_CLI_CLIENT_IDS", "").split(",")))
+    if os.environ.get("SIYUAN_HOMEPAGE_TOKEN"):
+        owner_app = app
+        homepage_app = build_homepage_app(base)
+
+        @asynccontextmanager
+        async def lifespan(application):
+            async with owner_app.router.lifespan_context(owner_app), homepage_app.router.lifespan_context(homepage_app):
+                yield
+
+        app = Starlette(routes=[Mount("/homepage", homepage_app), Mount("/", owner_app)], lifespan=lifespan)
     uvicorn.run(app, host="127.0.0.1", port=16809, access_log=False)

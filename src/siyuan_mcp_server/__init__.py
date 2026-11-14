@@ -11,7 +11,8 @@ from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, InputRequiredResult
 
-from .tools import is_siyuan_timestamp, mask_sensitive_data, parse_and_mask_kramdown
+from .tools import is_siyuan_timestamp
+from .access import check_file, filter_response, prepare_request
 
 
 _DEFAULT_SIYUAN_API_URL = "http://127.0.0.1:6806"
@@ -31,7 +32,7 @@ def _get_siyuan_request_parts(endpoint: str) -> Tuple[str, Dict[str, str]]:
     return f"{base_url}{endpoint}", headers
 
 
-def _post_to_siyuan_api(
+def _raw_post_to_siyuan_api(
     endpoint: str, json_data: Optional[Dict[str, Any]] = None
 ) -> Any:
     """发送 POST 请求到思源笔记 API
@@ -58,6 +59,12 @@ def _post_to_siyuan_api(
         return api_response.get("data")
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Failed to connect to Siyuan API: {e}") from e
+
+
+def _post_to_siyuan_api(endpoint: str, json_data=None) -> Any:
+    data, denied = prepare_request(endpoint, json_data, _raw_post_to_siyuan_api)
+    result = _raw_post_to_siyuan_api(endpoint, data)
+    return filter_response(endpoint, result, denied, _raw_post_to_siyuan_api, data)
 
 
 def _push_notification(endpoint: str, msg: str, timeout: int = 20000) -> Dict[str, Any]:
@@ -693,7 +700,7 @@ def search_blocks(
 
     注意事项:
         - parent_id 仅匹配直接子块，不会递归后代。
-        - 返回 content 会做敏感信息打码处理。
+        - 返回 content 原文。
 
     Args:
         query (str): 在块内容中搜索的关键词。
@@ -737,12 +744,6 @@ def search_blocks(
     if not isinstance(results, list):
         raise TypeError(f"Expected a list from SQL query, but got {type(results)}")
 
-    # 对搜索结果中的内容进行打码处理
-    for result in results:
-        if isinstance(result, dict):
-            if "content" in result:
-                result["content"] = mask_sensitive_data(result["content"])
-
     return results
 
 
@@ -754,7 +755,7 @@ def get_block_content(block_id: str) -> Dict[str, Any]:
         - 读取单个块的 kramdown 原文并用于审阅或后续处理。
 
     注意事项:
-        - 返回的 kramdown 会进行敏感信息打码。
+        - 返回完整 kramdown 原文。
         - 思源属性标记中的块 ID / 时间戳会被保留，便于定位。
 
     Args:
@@ -766,9 +767,6 @@ def get_block_content(block_id: str) -> Dict[str, Any]:
     result = _post_to_siyuan_api("/api/block/getBlockKramdown", {"id": block_id})
     if not isinstance(result, dict):
         raise TypeError(f"Expected a dict for block content, but got {type(result)}")
-    # 对 kramdown 字段进行智能敏感信息打码，保留思源属性中的ID
-    if "kramdown" in result and isinstance(result["kramdown"], str):
-        result["kramdown"] = parse_and_mask_kramdown(result["kramdown"])
     return result
 
 
@@ -781,7 +779,7 @@ def get_blocks_content(block_ids: List[str]) -> List[Dict[str, Any]]:
 
     注意事项:
         - 单个块失败不会中断整体，失败项会返回 error 字段。
-        - 返回的 kramdown 与 get_block_content 一样会做敏感信息打码。
+        - 返回的 kramdown 与 get_block_content 一样保留原文。
 
     Args:
         block_ids (List[str]): 块 ID 列表
@@ -796,9 +794,6 @@ def get_blocks_content(block_ids: List[str]) -> List[Dict[str, Any]]:
                 "/api/block/getBlockKramdown", {"id": block_id}
             )
             if isinstance(result, dict):
-                # 对 kramdown 字段进行智能敏感信息打码，保留思源属性中的ID
-                if "kramdown" in result and isinstance(result["kramdown"], str):
-                    result["kramdown"] = parse_and_mask_kramdown(result["kramdown"])
                 results.append(result)
             else:
                 results.append(
@@ -822,8 +817,7 @@ def execute_sql(query: str) -> List[Dict[str, Any]]:
         - 建议显式 LIMIT，避免一次返回过多数据。
 
     注意事项:
-        - 返回的字符串字段会进行敏感信息打码。
-        - 如需精确审计原始敏感字段值，不适合使用该工具。
+        - 返回所有字段的原始值。
 
     Args:
         query (str): SQL SELECT 查询语句
@@ -840,13 +834,6 @@ def execute_sql(query: str) -> List[Dict[str, Any]]:
     result = _post_to_siyuan_api("/api/query/sql", {"stmt": query})
     if not isinstance(result, list):
         raise TypeError(f"Expected a list from SQL query, but got {type(result)}")
-
-    # 对查询结果进行打码处理
-    for row in result:
-        if isinstance(row, dict):
-            for key, value in row.items():
-                if isinstance(value, str):
-                    row[key] = mask_sensitive_data(value)
 
     return result
 
@@ -1394,7 +1381,7 @@ def get_file(path: str) -> str:
     用于读取历史快照或其他数据文件。
 
     注意事项:
-        - 文本内容会进行敏感信息打码。
+        - 文本内容按 UTF-8 返回原文。
         - 若文件为二进制且无法解码为 UTF-8，将返回 '[Binary Data]'。
 
     Args:
@@ -1403,6 +1390,7 @@ def get_file(path: str) -> str:
     Returns:
         str: 文件内容（文本）或二进制数据提示。
     """
+    check_file(path, _raw_post_to_siyuan_api)
     url, headers = _get_siyuan_request_parts("/api/file/getFile")
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
@@ -1411,8 +1399,7 @@ def get_file(path: str) -> str:
         # 尝试将内容解码为文本
         try:
             content = response.content.decode("utf-8")
-            # 对文件内容进行敏感信息打码
-            return mask_sensitive_data(content)
+            return content
         except UnicodeDecodeError:
             return "[Binary Data]"
 
@@ -1424,31 +1411,23 @@ def get_file(path: str) -> str:
 def get_file_base64(path: str) -> str:
     """读取指定文件内容并以 Base64 返回（只读）。
 
-    适用于需要以 Base64 形式返回的 UTF-8 文本文件（例如历史快照里的 JSON）。
+    适用于需要以 Base64 形式返回的文本或二进制文件。
 
     注意事项:
-        - 本实现会先按 UTF-8 解码后再打码并进行 Base64 编码。
-        - 若文件为纯二进制且无法 UTF-8 解码，将抛出异常（不支持二进制打码）。
+        - 直接对原始文件字节进行 Base64 编码。
 
     Args:
         path: 文件路径，例如 '/history/.../blocks.msgpack'。
 
     Returns:
-        str: Base64 编码的文件内容（已打码）。
+        str: Base64 编码的原始文件内容。
     """
+    check_file(path, _raw_post_to_siyuan_api)
     url, headers = _get_siyuan_request_parts("/api/file/getFile")
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
-        try:
-            text = response.content.decode("utf-8")
-        except UnicodeDecodeError as e:
-            raise ValueError(
-                "Binary content cannot be safely masked for base64 export."
-            ) from e
-
-        masked = mask_sensitive_data(text)
-        return base64.b64encode(masked.encode("utf-8")).decode("ascii")
+        return base64.b64encode(response.content).decode("ascii")
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Failed to get file: {e}") from e
 
@@ -1481,7 +1460,7 @@ def get_history_file(path: str) -> str:
 
     注意事项:
         - path 必须以 '/history' 或 '/data/history' 开头。
-        - 行为与 get_file 一致，文本会做敏感信息打码。
+        - 行为与 get_file 一致，返回原始文本。
 
     Args:
         path: 历史快照文件路径，必须以 "/history" 或 "/data/history" 开头。
@@ -1495,6 +1474,7 @@ def get_history_file(path: str) -> str:
 
 
 def _get_file_text_raw(path: str) -> str:
+    check_file(path, _raw_post_to_siyuan_api)
     url, headers = _get_siyuan_request_parts("/api/file/getFile")
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
@@ -1703,9 +1683,6 @@ def get_block_changes(
         )
 
         item = dict(row)
-        for key, value in item.items():
-            if isinstance(value, str):
-                item[key] = mask_sensitive_data(value)
 
         if in_created_range:
             added.append(item)
@@ -1743,7 +1720,7 @@ def get_block_diffs(
 
     注意事项:
     - 依赖 history_root 可读；若历史目录不可访问，将无法完成比对。
-    - before/after 为脱敏文本；max_text_length 会对长文本截断。
+    - before/after 为原始文本；max_text_length 会对长文本截断。
 
     Args:
         start_time: 起始时间，格式为 'YYYYMMDDHHMMSS'。
@@ -1844,7 +1821,7 @@ def get_block_diffs(
                     "box": box,
                     "path": path,
                     "snapshot": snapshot,
-                    "before": mask_sensitive_data(history_text),
+                    "before": history_text,
                     "after": "",
                     "change": "删除",
                 }
@@ -1855,14 +1832,14 @@ def get_block_diffs(
         if after_text is None and before_text is None:
             continue
 
-        masked_before = mask_sensitive_data(before_text or "")
-        masked_after = mask_sensitive_data(after_text or "")
+        output_before = before_text or ""
+        output_after = after_text or ""
 
         if max_text_length > 0:
-            if len(masked_before) > max_text_length:
-                masked_before = masked_before[:max_text_length] + "..."
-            if len(masked_after) > max_text_length:
-                masked_after = masked_after[:max_text_length] + "..."
+            if len(output_before) > max_text_length:
+                output_before = output_before[:max_text_length] + "..."
+            if len(output_after) > max_text_length:
+                output_after = output_after[:max_text_length] + "..."
 
         diff_stats = _describe_diff(before_text or "", after_text or "")
         change_desc = _describe_change(before_text or "", after_text or "", diff_stats)
@@ -1877,8 +1854,8 @@ def get_block_diffs(
                 "created": created,
                 "updated": updated,
                 "snapshot": snapshot,
-                "before": masked_before,
-                "after": masked_after,
+                "before": output_before,
+                "after": output_after,
                 "diff": diff_stats,
                 "change": change_desc,
             }
