@@ -121,8 +121,10 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
         if not pending:
             return PlainTextResponse("Authorization request expired. Start connecting again.", status_code=400)
         params = AuthorizationParams.model_validate(pending["params"])
+        callback = urlparse(str(params.redirect_uri))
+        callback_origin = f"{callback.scheme}://{callback.netloc}"
         headers = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin", "X-Frame-Options": "DENY",
-                   "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"}
+                   "Content-Security-Policy": f"default-src 'none'; style-src 'unsafe-inline'; form-action 'self' {callback_origin}; frame-ancestors 'none'"}
         if request.method == "POST":
             form = await request.form()
             csrf = str(form.get("csrf", ""))
@@ -148,7 +150,7 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
             return response
         client = await self.get_client(pending["client_id"])
         name = html.escape(client.client_name or client.client_id)
-        callback = html.escape(urlparse(str(params.redirect_uri)).netloc)
+        callback = html.escape(callback.netloc)
         body = f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>连接思源笔记</title>
 <style>body{{font:18px system-ui;max-width:560px;margin:10vh auto;padding:24px;line-height:1.6}}input,button{{font:inherit;padding:10px;box-sizing:border-box;width:100%;margin-top:12px}}small{{overflow-wrap:anywhere}}</style>
 <h1>连接思源笔记</h1><p>客户端：<strong>{name}</strong><br>授权回调：<small>{callback}</small></p>
