@@ -121,7 +121,7 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
         if not pending:
             return PlainTextResponse("Authorization request expired. Start connecting again.", status_code=400)
         params = AuthorizationParams.model_validate(pending["params"])
-        headers = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+        headers = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin", "X-Frame-Options": "DENY",
                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"}
         if request.method == "POST":
             form = await request.form()
