@@ -19,7 +19,7 @@ class NotebookAccessTests(unittest.TestCase):
         ])
         self.db.execute("CREATE TABLE assets(box,path)")
         self.db.executemany("INSERT INTO assets VALUES(?,?)", [("alibaba", "assets/company.jpg"), ("home", "assets/photo.jpg")])
-        self.notebooks = [{"id": "home", "name": "Wenyuan Xu"}, {"id": "alibaba", "name": "Alibaba"}, {"id": "diary", "name": "Diary"}]
+        self.notebooks = [{"id": "home", "name": "Wenyuan Xu"}, {"id": "alibaba", "name": "Alibaba(-NM)"}, {"id": "diary", "name": "Diary(-NB)"}]
         self.addCleanup(self.db.close)
 
     def raw(self, endpoint, data=None):
@@ -36,6 +36,26 @@ class NotebookAccessTests(unittest.TestCase):
             self.assertEqual([row["id"] for row in result["notebooks"]], ["home"])
         finally:
             web_client.reset(token)
+
+    def test_suffix_policy_applies_to_any_notebook_and_changes_on_rename(self):
+        self.notebooks = [
+            {"id": "a", "name": "Research(-NM)"},
+            {"id": "b", "name": "Personal(-NB)"},
+            {"id": "c", "name": "Alibaba"},
+            {"id": "d", "name": "Diary"},
+            {"id": "e", "name": "(-NM) planning"},
+            {"id": "f", "name": "Reference(-NB) notes"},
+        ]
+        self.assertEqual(notebook_policy(self.raw)[1], {"a"})
+        token = web_client.set(True)
+        try:
+            self.assertEqual(notebook_policy(self.raw)[1], {"a", "b"})
+            self.notebooks[0]["name"] = "Research"
+            self.notebooks[2]["name"] = "Alibaba(-NB)"
+            self.assertEqual(notebook_policy(self.raw)[1], {"b", "c"})
+        finally:
+            web_client.reset(token)
+        self.assertEqual(notebook_policy(self.raw)[1], set())
 
     def test_sql_scopes_before_projection_and_aggregation(self):
         for query in [

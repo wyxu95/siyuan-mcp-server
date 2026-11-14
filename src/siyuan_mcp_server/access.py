@@ -1,7 +1,6 @@
 """Notebook access policy shared by HTTPS and local MCP tools."""
 import posixpath
 import re
-import os
 from contextvars import ContextVar
 from urllib.parse import unquote
 
@@ -15,11 +14,8 @@ _tables = {"blocks", "spans", "assets", "attributes", "refs"}
 
 def notebook_policy(raw):
     notebooks = raw("/api/notebook/lsNotebooks")["notebooks"]
-    names = {"Alibaba", "Diary"} if web_client.get() else {"Alibaba"}
-    denied = {item["id"] for item in notebooks if item["name"] in names}
-    denied.update(filter(None, os.environ.get("SIYUAN_BLOCKED_NOTEBOOK_IDS", "").split(",")))
-    if web_client.get():
-        denied.update(filter(None, os.environ.get("SIYUAN_WEB_BLOCKED_NOTEBOOK_IDS", "").split(",")))
+    suffixes = ("(-NM)", "(-NB)") if web_client.get() else ("(-NM)",)
+    denied = {item["id"] for item in notebooks if item["name"].endswith(suffixes)}
     return notebooks, denied
 
 

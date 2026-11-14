@@ -56,13 +56,15 @@ Cloudflare A 记录指向 `130.61.100.223`，DNS only。
 
 读取工具返回完整原文，包括邮箱、链接、路径、属性和凭据。文件 Base64 工具支持原始二进制附件。
 
-| 客户端 | Diary | Alibaba | 其他笔记本 |
+| 客户端 | 后缀 `(-NB)` | 后缀 `(-NM)` | 其他笔记本 |
 | --- | --- | --- | --- |
 | Codex CLI、Claude CLI | 可访问 | 禁用 | 可访问 |
 | ChatGPT、Claude 网页版 | 禁用 | 禁用 | 可访问 |
 
+在思源中为笔记本名称添加后缀即可设置权限，例如 `Alibaba(-NM)`、`Diary(-NB)`。每次调用都读取当前笔记本名称，改名后下次调用生效。后缀按表中大小写与括号精确匹配。
+
 `SIYUAN_CLI_CLIENT_IDS` 保存已授权的 CLI OAuth 客户端 ID，以逗号分隔；重新注册 CLI 时将新 ID 加入该配置并重启。其他 HTTPS 客户端使用网页版范围。本地 stdio 使用 CLI 范围。
-`SIYUAN_BLOCKED_NOTEBOOK_IDS` 固定所有客户端受限的笔记本 ID，`SIYUAN_WEB_BLOCKED_NOTEBOOK_IDS` 固定网页版额外受限的 ID。规则同时按 Alibaba、Diary 名称匹配，覆盖搜索、SQL、块操作和文件/附件。SQL 查询在投影、聚合和子查询前按笔记本过滤；文件工具读取有权限的文档及其索引附件。
+规则覆盖搜索、SQL、块操作和文件/附件。SQL 查询在投影、聚合和子查询前按笔记本过滤；文件工具读取有权限的文档及其索引附件。
 
 ### Cloudflare 主页
 
