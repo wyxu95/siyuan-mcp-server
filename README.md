@@ -1,3 +1,31 @@
+# Wenyuan 的思源 MCP 部署
+
+这是 [leolulu/siyuan-mcp-server](https://github.com/leolulu/siyuan-mcp-server)
+的 fork，提供可以通过标准 MCP 命令安装的远程思源服务。
+
+```sh
+# Claude Code
+claude mcp add --scope user --transport http siyuan https://siyuan-mcp.wenyuanxu.net/mcp
+claude mcp login siyuan
+
+# Codex（添加时自动引导 OAuth 登录）
+codex mcp add siyuan --url https://siyuan-mcp.wenyuanxu.net/mcp
+```
+
+| 目录 | 用途 |
+| --- | --- |
+| [src/siyuan_mcp_server/](src/siyuan_mcp_server/) | 上游思源 MCP 工具实现 |
+| [remote/](remote/README.md) | 服务器 HTTPS／OAuth 代码、systemd 和 Nginx 配置 |
+| [local/](local/README.md) | 本地 Claude／Codex 标准安装与登录命令 |
+| [claude-web/](claude-web/README.md) | Claude 网页插件及其 ZIP 打包 |
+
+本地客户端通过 HTTPS 和 OAuth 访问远程服务。服务器的 API 凭据保存在服务器端，
+客户端持有各自的 OAuth 授权。部署文档也包含 ChatGPT 网页版接入方式。
+
+下方保留上游原始说明，其中的 stdio 用法适用于直接运行上游工具。
+
+---
+
 # 思源笔记 MCP 服务器 (官方 SDK 版)
 
 本项目提供了一个基于官方SDK构建的思源笔记 MCP (Model Context Protocol) 服务器。它允许 AI Agent 通过一套标准化的工具与您的思源笔记知识库进行交互。

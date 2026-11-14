@@ -1,0 +1,11 @@
+[project]
+name = "wenyuan-siyuan-mcp-remote"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+  "siyuan-mcp-server",
+  "mcp==2.2.0",
+]
+
+[tool.uv.sources]
+siyuan-mcp-server = { path = "..", editable = true }

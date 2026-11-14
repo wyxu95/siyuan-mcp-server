@@ -1,0 +1,7 @@
+{
+  "name": "siyuan-notes",
+  "version": "1.0.0",
+  "description": "Search, read and edit Wenyuan's Siyuan notes through an authenticated MCP connection.",
+  "author": {"name": "Wenyuan Xu"},
+  "homepage": "https://siyuan.wenyuanxu.net"
+}

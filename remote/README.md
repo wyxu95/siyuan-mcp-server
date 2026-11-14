@@ -1,0 +1,74 @@
+# 远程 HTTPS MCP / OAuth 服务
+
+此目录运行服务器端 Python 服务：OAuth 动态注册、PKCE、登录页、Token
+持久化和 HTTPS MCP 适配。Nginx 将 HTTPS 请求转发到此服务。
+`src/siyuan_mcp_server/` 提供共用的思源工具实现。
+
+当前部署：`ssh oracleg`，`/home/ubuntu/siyuan/mcp/siyuan-mcp-server/remote`。
+公网入口：`https://siyuan-mcp.wenyuanxu.net/mcp`。
+服务监听 `127.0.0.1:16809`，思源 API 监听 `127.0.0.1:6806`。
+
+## 安装
+
+```sh
+cd /home/ubuntu/siyuan/mcp
+git clone https://github.com/wyxu95/siyuan-mcp-server.git
+cd siyuan-mcp-server/remote
+uv sync --locked
+```
+
+服务环境文件为 `/home/ubuntu/siyuan/mcp/credentials.env`，权限 600：
+
+```sh
+SIYUAN_API_URL=http://127.0.0.1:6806
+SIYUAN_API_TOKEN=YOUR_SIYUAN_API_TOKEN
+SIYUAN_MCP_BASE_URL=https://siyuan-mcp.wenyuanxu.net
+SIYUAN_MCP_PASSWORD=YOUR_MCP_CONNECTION_PASSWORD
+SIYUAN_MCP_DB=/home/ubuntu/siyuan/mcp/state/oauth.sqlite3
+```
+
+密钥源由所有者在 `~/linux_dotfiles/secrets.env.age` 中使用 `sedit` 管理，
+将对应值同步到服务环境文件，再重启服务。初始 MCP 连接密码与现有思源
+网页访问授权码相同。轮换思源 API Token 时同步更新思源本身的设置。
+OAuth 数据库所在的 `state/` 目录权限为 700，数据库文件权限为 600。
+
+当前 systemd 配置见 `siyuan-mcp.service`，Nginx 配置见 `nginx.conf`：
+
+```sh
+sudo cp siyuan-mcp.service /etc/systemd/system/
+sudo cp nginx.conf /etc/nginx/conf.d/siyuan-mcp.wenyuanxu.net.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now siyuan-mcp
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Cloudflare A 记录指向 `130.61.100.223`，DNS only。
+证书位于 `/etc/letsencrypt/live/siyuan-mcp.wenyuanxu.net/`，
+由 Certbot 使用已有 Cloudflare DNS 凭据自动续期，并重载 Nginx。
+
+更新代码后运行 `uv sync --locked` 并重启服务。保留环境文件和
+`state/oauth.sqlite3` 即可保留密钥和已有授权。
+
+## 运维与验证
+
+```sh
+sudo systemctl status siyuan-mcp --no-pager
+sudo journalctl -u siyuan-mcp -n 50 --no-pager
+uv run --locked python -m unittest -v test_oauth
+```
+
+访问 Token 有效期一小时，刷新 Token 为三十天；刷新时轮换并撤销旧 Token。
+撤销接口同时撤销配对 Token。登录页检查 Origin 和 CSRF cookie，
+登录与注册端点由 Nginx 限速。
+
+## ChatGPT 网页版
+
+在 <https://chatgpt.com/plugins> 选择 **Add custom MCP server**，填写
+`https://siyuan-mcp.wenyuanxu.net/mcp`，认证选 **OAuth**，使用动态注册
+（DCR），然后 **Create as a plugin** 并完成登录。OAuth discovery 提供
+端点信息，scope 为 `siyuan`，PKCE 为 `S256`。
+
+官方步骤：<https://developers.openai.com/plugins/deploy/connect-chatgpt>。
+
+Claude 网页插件见 [../claude-web/README.md](../claude-web/README.md)。

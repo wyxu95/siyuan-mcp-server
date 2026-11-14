@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "siyuan": {
+      "type": "http",
+      "url": "https://siyuan-mcp.wenyuanxu.net/mcp"
+    }
+  }
+}

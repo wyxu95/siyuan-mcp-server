@@ -1,0 +1,22 @@
+[Unit]
+Description=Siyuan MCP HTTPS and OAuth
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/siyuan/mcp/siyuan-mcp-server/remote
+EnvironmentFile=/home/ubuntu/siyuan/mcp/credentials.env
+ExecStart=/home/ubuntu/siyuan/mcp/siyuan-mcp-server/remote/.venv/bin/python /home/ubuntu/siyuan/mcp/siyuan-mcp-server/remote/server.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/siyuan/mcp/state
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
