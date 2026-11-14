@@ -72,7 +72,7 @@ Cloudflare A 记录指向 `130.61.100.223`，DNS only。
 
 主页由 `wyxu95/homepage` 中的“发布主页”思源插件手动发布。桌面端和服务器浏览器端都导出当前文档及图片，提交到 `https://wenyuanxu.net/api/homepage/publish`；Cloudflare Pages Functions 完成排版，Worker `wenyuan-homepage-publication` 的 Durable Object 保存统一发布版本。插件提示成功后，访客刷新即可读取新版本，草稿在下一次点击发布时更新。
 
-发布接口的独立密钥 `HOMEPAGE_PUBLISH_TOKEN` 同时保存在本服务环境文件与 Pages 项目生产 Secret。每个思源实例的插件设置位于 `data/storage/petal/siyuan-homepage-publisher/config.json`。当前 Windows 本地与服务器均已安装并启用；安装包为 `https://wenyuanxu.net/downloads/siyuan-homepage-publisher.zip`。只读主页 MCP 入口继续供已授权工具使用。
+发布接口的独立密钥 `HOMEPAGE_PUBLISH_TOKEN` 同时保存在本服务环境文件与 Pages 项目生产 Secret。每个思源实例的插件设置位于 `data/storage/petal/siyuan-homepage-publisher/config.json`。当前 Windows 本地与服务器均已安装并启用；插件源码与安装包保存在私有仓库 `https://github.com/wyxu95/siyuan-homepage-publisher` 的 Releases。只读主页 MCP 入口继续供已授权工具使用。
 
 ```sh
 sudo systemctl status siyuan-mcp --no-pager
