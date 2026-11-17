@@ -68,7 +68,8 @@ def build_server(provider):
 
 if __name__ == "__main__":
     base = os.environ["SIYUAN_MCP_BASE_URL"].rstrip("/")
-    provider = PasswordOAuth(base, os.environ["SIYUAN_MCP_PASSWORD"], os.environ["SIYUAN_MCP_DB"])
+    shared_client_ids = {value for value in os.environ.get("SIYUAN_SHARED_REFRESH_CLIENT_IDS", "").split(",") if value}
+    provider = PasswordOAuth(base, os.environ["SIYUAN_MCP_PASSWORD"], os.environ["SIYUAN_MCP_DB"], shared_client_ids)
     server = build_server(provider)
     server.custom_route("/login", methods=["GET", "POST"])(provider.login)
     app = server.streamable_http_app(
@@ -93,7 +94,7 @@ if __name__ == "__main__":
     app.routes.insert(0, Route("/.well-known/oauth-authorization-server", metadata))
     app.routes.insert(0, Route("/revoke", cors_middleware(provider.revoke_request, ["POST", "OPTIONS"]), methods=["POST", "OPTIONS"]))
     app.add_middleware(ClientAccessMiddleware, provider=provider,
-                       cli_client_ids=set(os.environ.get("SIYUAN_CLI_CLIENT_IDS", "").split(",")))
+                       cli_client_ids=set(os.environ.get("SIYUAN_CLI_CLIENT_IDS", "").split(",")) | shared_client_ids)
     if os.environ.get("SIYUAN_HOMEPAGE_TOKEN"):
         owner_app = app
         homepage_app = build_homepage_app(base)

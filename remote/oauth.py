@@ -18,8 +18,9 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 
 
 class PasswordOAuth(OAuthAuthorizationServerProvider):
-    def __init__(self, base, password, database):
+    def __init__(self, base, password, database, shared_client_ids=()):
         self.base, self.resource, self.password = base, base + "/mcp", password
+        self.shared_client_ids = set(shared_client_ids)
         Path(database).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(database)
         Path(database).chmod(0o600)
@@ -31,7 +32,7 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
             self.db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?,?)", (kind, key, json.dumps(data), expires))
 
     def load(self, kind, key):
-        row = self.db.execute("SELECT data FROM records WHERE kind=? AND key=? AND expires>?", (kind, key, time.time())).fetchone()
+        row = self.db.execute("SELECT data FROM records WHERE kind=? AND key=? AND (expires IS NULL OR expires>?)", (kind, key, time.time())).fetchone()
         return json.loads(row[0]) if row else None
 
     def take(self, kind, key):
@@ -64,6 +65,8 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
         return AuthorizationCode.model_validate(data) if data else None
 
     def issue(self, client_id, scopes, resource):
+        if client_id in self.shared_client_ids:
+            return self.issue_shared(client_id, scopes, resource)
         now = int(time.time())
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         common = dict(client_id=client_id, scopes=scopes, resource=resource, subject="wenyuan")
@@ -71,6 +74,26 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
         self.save("refresh", refresh, RefreshToken(token=refresh, expires_at=now + 30 * 86400, **common).model_dump(), now + 30 * 86400)
         self.save("pair", hashlib.sha256(access.encode()).hexdigest(), {"access": access, "refresh": refresh}, now + 30 * 86400)
         self.save("pair", hashlib.sha256(refresh.encode()).hexdigest(), {"access": access, "refresh": refresh}, now + 30 * 86400)
+        return OAuthToken(access_token=access, token_type="Bearer", expires_in=3600, refresh_token=refresh, scope=" ".join(scopes))
+
+    def issue_shared(self, client_id, scopes, resource, refresh=None):
+        now = int(time.time())
+        access, refresh = secrets.token_urlsafe(32), refresh or secrets.token_urlsafe(32)
+        common = dict(client_id=client_id, scopes=scopes, resource=resource, subject="wenyuan")
+        # Promote an existing CLI grant while retaining its live access token.
+        pair = self.take("pair", hashlib.sha256(refresh.encode()).hexdigest())
+        if pair:
+            old = self.load("access", pair["access"])
+            if old:
+                self.save("shared_access", pair["access"], {"refresh": refresh}, old["expires_at"])
+            self.take("pair", hashlib.sha256(pair["access"].encode()).hexdigest())
+        self.save("refresh", refresh, RefreshToken(token=refresh, expires_at=None, **common).model_dump(), None)
+        self.save("shared", refresh, {"client_id": client_id}, None)
+        self.save("access", access, AccessToken(token=access, expires_at=now + 3600, **common).model_dump(), now + 3600)
+        self.save("shared_access", access, {"refresh": refresh}, now + 3600)
+        client = self.load("client", client_id)
+        if client:
+            self.save("client", client_id, client, None)
         return OAuthToken(access_token=access, token_type="Bearer", expires_in=3600, refresh_token=refresh, scope=" ".join(scopes))
 
     async def exchange_authorization_code(self, client, authorization_code):
@@ -83,6 +106,14 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
         return RefreshToken.model_validate(data) if data else None
 
     async def exchange_refresh_token(self, client, refresh_token, scopes):
+        if client.client_id in self.shared_client_ids:
+            current = self.load("refresh", refresh_token.token)
+            if (not current or current["client_id"] != client.client_id
+                    or not set(scopes).issubset(current["scopes"])):
+                raise TokenError("invalid_grant", "Shared refresh grant is invalid")
+            return self.issue_shared(client.client_id, scopes, refresh_token.resource, refresh_token.token)
+        if self.load("shared", refresh_token.token):
+            raise TokenError("invalid_grant", "Shared refresh client is disabled")
         if not self.take("refresh", refresh_token.token):
             raise TokenError("invalid_grant", "Refresh token already consumed")
         await self.revoke_token(refresh_token)
@@ -93,6 +124,17 @@ class PasswordOAuth(OAuthAuthorizationServerProvider):
         return AccessToken.model_validate(data) if data else None
 
     async def revoke_token(self, token):
+        shared = self.load("shared", token.token)
+        access = self.load("shared_access", token.token)
+        refresh = token.token if shared else access["refresh"] if access else None
+        if refresh:
+            with self.db:
+                self.db.execute("DELETE FROM records WHERE kind IN ('refresh','shared') AND key=?", (refresh,))
+                rows = self.db.execute("SELECT key,data FROM records WHERE kind='shared_access'").fetchall()
+                for key, data in rows:
+                    if json.loads(data)["refresh"] == refresh:
+                        self.db.execute("DELETE FROM records WHERE kind IN ('access','shared_access') AND key=?", (key,))
+            return
         pair = self.take("pair", hashlib.sha256(token.token.encode()).hexdigest())
         if pair:
             with self.db:

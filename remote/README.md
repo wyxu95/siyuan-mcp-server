@@ -84,6 +84,24 @@ uv run --locked python -m unittest -v test_oauth
 撤销接口同时撤销配对 Token。登录页检查 Origin 和 CSRF cookie，
 登录与注册端点由 Nginx 限速。
 
+### 多机器共享 CLI 刷新授权
+
+在服务环境文件中用 `SIYUAN_SHARED_REFRESH_CLIENT_IDS` 指定专用共享客户端 ID，
+多个 ID 以逗号分隔。重启服务后，这些客户端的刷新令牌可重复使用，
+持续有效直到撤销；每次刷新签发独立的一小时访问令牌。
+已有有效刷新授权会在首次刷新时升级为共享授权，客户端 ID 的注册持续有效。
+这些客户端自动使用现有 CLI 笔记本权限。
+
+所有者将该客户端 ID 和刷新令牌保存到 dotfiles 的
+`SIYUAN_MCP_OAUTH_CLIENT_ID`、`SIYUAN_MCP_REFRESH_TOKEN` 中。
+各机器的 `mcp-siyuan` 读取环境变量，自动获取访问令牌并转发 stdio MCP 请求。
+新机器加载同一份凭据后即可接入。
+
+向 `/revoke` 提交共享刷新令牌或其任一访问令牌，会撤销整份共享授权
+及其全部访问令牌。创建新授权、更新加密凭据并重启各客户端即可恢复使用。
+从共享客户端配置中移除 ID 会停止后续共享刷新。
+其他客户端继续使用三十天轮换刷新授权。
+
 ## ChatGPT 网页版
 
 在 <https://chatgpt.com/plugins> 选择 **Add custom MCP server**，填写

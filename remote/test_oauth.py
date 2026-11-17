@@ -1,9 +1,12 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import AuthorizationCode, TokenError
+from mcp.server.auth.handlers.token import TokenHandler
+from mcp.server.auth.middleware.client_auth import ClientAuthenticator
 from mcp.shared.auth import OAuthClientInformationFull
 from starlette.requests import Request
 
@@ -60,6 +63,98 @@ class OAuthTests(unittest.IsolatedAsyncioTestCase):
         rotated = await self.provider.exchange_refresh_token(self.client, refresh, ["siyuan"])
         self.assertIsNone(await self.provider.load_access_token(tokens.access_token))
         self.assertIsNotNone(await self.provider.load_access_token(rotated.access_token))
+        with self.assertRaises(TokenError):
+            await self.provider.exchange_refresh_token(self.client, refresh, ["siyuan"])
+
+    async def test_shared_refresh_supports_independent_clients_and_restart(self):
+        self.provider.shared_client_ids.add(self.client.client_id)
+        initial = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        refresh = await self.provider.load_refresh_token(self.client, initial.refresh_token)
+        second = await self.provider.exchange_refresh_token(self.client, refresh, ["siyuan"])
+        reopened = PasswordOAuth(self.provider.base, "test-password", self.database, [self.client.client_id])
+        try:
+            third = await reopened.exchange_refresh_token(self.client, refresh, ["siyuan"])
+            self.assertEqual(initial.refresh_token, second.refresh_token)
+            self.assertEqual(initial.refresh_token, third.refresh_token)
+            self.assertIsNone(refresh.expires_at)
+            self.assertEqual(len({initial.access_token, second.access_token, third.access_token}), 3)
+            for token in (initial, second, third):
+                self.assertIsNotNone(await reopened.load_access_token(token.access_token))
+            self.assertIsNone(reopened.db.execute("SELECT expires FROM records WHERE kind='client'").fetchone()[0])
+        finally:
+            reopened.db.close()
+
+    async def test_shared_revoke_removes_all_access_tokens_and_blocks_stale_refresh(self):
+        self.provider.shared_client_ids.add(self.client.client_id)
+        initial = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        refresh = await self.provider.load_refresh_token(self.client, initial.refresh_token)
+        second = await self.provider.exchange_refresh_token(self.client, refresh, ["siyuan"])
+        response = await self.provider.revoke_request(self.form_request({
+            "client_id": self.client.client_id, "token": second.access_token,
+        }))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(await self.provider.load_access_token(initial.access_token))
+        self.assertIsNone(await self.provider.load_access_token(second.access_token))
+        self.assertIsNone(await self.provider.load_refresh_token(self.client, initial.refresh_token))
+        with self.assertRaises(TokenError):
+            await self.provider.exchange_refresh_token(self.client, refresh, ["siyuan"])
+
+    async def test_shared_grant_can_be_revoked_by_refresh_token(self):
+        self.provider.shared_client_ids.add(self.client.client_id)
+        initial = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        refresh = await self.provider.load_refresh_token(self.client, initial.refresh_token)
+        await self.provider.revoke_token(refresh)
+        self.assertIsNone(await self.provider.load_access_token(initial.access_token))
+        self.assertIsNone(await self.provider.load_refresh_token(self.client, initial.refresh_token))
+
+    async def test_shared_grants_are_isolated_and_check_client_and_scope(self):
+        self.provider.shared_client_ids.add(self.client.client_id)
+        initial = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        unrelated = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        refresh = await self.provider.load_refresh_token(self.client, initial.refresh_token)
+        other = self.client.model_copy(update={"client_id": "client-b"})
+        self.provider.shared_client_ids.add(other.client_id)
+        with self.assertRaises(TokenError):
+            await self.provider.exchange_refresh_token(other, refresh, ["siyuan"])
+        with self.assertRaises(TokenError):
+            await self.provider.exchange_refresh_token(self.client, refresh, ["extra-scope"])
+        await self.provider.revoke_token(refresh)
+        self.assertIsNotNone(await self.provider.load_access_token(unrelated.access_token))
+        self.assertIsNotNone(await self.provider.load_refresh_token(self.client, unrelated.refresh_token))
+
+    async def test_existing_cli_grant_is_promoted_and_remains_revocable(self):
+        initial = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        self.provider.shared_client_ids.add(self.client.client_id)
+        refresh = await self.provider.load_refresh_token(self.client, initial.refresh_token)
+        second = await self.provider.exchange_refresh_token(self.client, refresh, ["siyuan"])
+        self.assertEqual(initial.refresh_token, second.refresh_token)
+        old_access = await self.provider.load_access_token(initial.access_token)
+        self.assertIsNotNone(old_access)
+        await self.provider.revoke_token(old_access)
+        self.assertIsNone(await self.provider.load_access_token(second.access_token))
+        self.assertIsNone(await self.provider.load_refresh_token(self.client, initial.refresh_token))
+
+    async def test_shared_refresh_through_sdk_endpoint(self):
+        self.provider.shared_client_ids.add(self.client.client_id)
+        initial = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        handler = TokenHandler(self.provider, ClientAuthenticator(self.provider))
+        form = {"grant_type": "refresh_token", "client_id": self.client.client_id,
+                "refresh_token": initial.refresh_token, "resource": self.provider.resource}
+        for _ in range(2):
+            response = await handler.handle(self.form_request(form))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(json.loads(response.body)["refresh_token"], initial.refresh_token)
+        refresh = await self.provider.load_refresh_token(self.client, initial.refresh_token)
+        await self.provider.revoke_token(refresh)
+        response = await handler.handle(self.form_request(form))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(json.loads(response.body)["error"], "invalid_grant")
+
+    async def test_removed_shared_client_cannot_refresh(self):
+        self.provider.shared_client_ids.add(self.client.client_id)
+        initial = self.provider.issue(self.client.client_id, ["siyuan"], self.provider.resource)
+        refresh = await self.provider.load_refresh_token(self.client, initial.refresh_token)
+        self.provider.shared_client_ids.clear()
         with self.assertRaises(TokenError):
             await self.provider.exchange_refresh_token(self.client, refresh, ["siyuan"])
 
